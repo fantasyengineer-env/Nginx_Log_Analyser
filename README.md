@@ -1,4 +1,8 @@
-# log-analyser
+#Devops RoadMap.sh Day 3
+
+https://roadmap.sh/projects/nginx-log-analyser
+
+## log-analyser
 
 A Bash script that parses an Nginx access log (combined format) and reports the top 5 IP addresses, requested paths, response status codes, and user agents.
 
