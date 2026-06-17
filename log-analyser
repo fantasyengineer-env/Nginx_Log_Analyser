@@ -1,0 +1,172 @@
+#!/bin/bash
+
+ # nginx "combined" style)
+ # IP - - [date:time +offset] "METHOD /path HTTP/x.x" status size "referrer" "user-agent"
+ # This helps me understand how to parse the complete line into the sections that I need for analysis
+ 
+#saftey feature 
+# why is it important?
+# 	stops script early instead of continuing after an error. 
+#-e = exit immmediately if any command returns a non-zero status $?
+#-u = treat use of an undefined variable as an eroor (catches typos)
+#-o pipefail = whole pipeline fails if any command fails in script 
+
+ set -euo pipefail
+
+# $1 = first command line argument
+# { :-} = is $1 is unset use "" instead of erroring
+# -u in set prevents saftey feature from stopping the script immediatley. This allows for me to print an error message for debugging
+
+ LOGFILE="${1:-}"
+
+#if string is empty print message and exit with error status code 1
+#this is why I added the ${ :-} in the variable definition
+#why is this important?
+#	an empty file means that I do not have the ability to process any data to be analysed and used to 	provide insight to server traffic 
+
+if [[ -z "$LOGFILE" ]]; then 
+	echo "Usage: $0 <path-to-nginx-acces.log> does not contain data empty."
+	exit 1
+fi
+
+
+#if path does not exist output error message and exit program with error code 1
+#why is this important
+#	an empty file means that I do not have the ability to process any data to be analysed and used to  provide insight to server traffic
+if [[ ! -f "$LOGFILE" ]]; then
+	echo "Error: file not found: $LOGFILE"
+	exit 1
+fi
+
+#used to show how many values to show in each section
+#provides an easy way to edit output without needing to manually change function values
+
+TOP_N=5
+
+#print top 5 ips
+#What is the purpose?
+#	count the IP address for each request, show top 5.
+
+print_top_ips() {
+	echo "Top 5 IP addresses with the most requests:"
+
+	#splits line by taking the first field of the nginx log file and use repeated sort pipeline to organize data for readable display
+	
+	awk '{print $1}' "$LOGFILE" \
+		| sort \
+		| uniq -c \
+		| sort -rn \
+		| head -n "$TOP_N" \
+		| awk '{printf "%s - %s requests\n", $2, $1}'
+	echo
+}
+
+#print top paths
+#what is the purpose?
+#	count number of request for each URL path, show top 5
+
+print_top_paths() {
+	echo "Top 5 most requested paths:"
+	
+	# -- grep search command --
+	
+	# " " are included to anchor the grep search to the exact boundaries of the request field
+	# -o = output only mathed portion of each line
+	# -P = Pearl-compatible regex
+	# \S+ = greedy search for one or more non-whitespace chars
+	# HTTP/ = hard code text to look for in line
+	# [0-9.]+ = character class, meaning "match any one of these characters in any order and any quantity
+	# 	you can limit quantity by adding exactly n digits {n}, n or more digits {n,}, or between n and m digits {n,m} to end of class
+	# expected output = "GET /api/v1/users HTTP/1.1"
+	
+	# -- first awk call -- 
+	
+	#-F = field delimeter 
+	#extract content inside of " " as a single field, removing quotes
+	
+	#-- second awk call --
+	
+	# use default whitespace and extract the path 
+	
+	# -- sort pattern --
+	
+	# "|| true" after grep: grep exits 1 when it finds zero matches (e.g. malformed
+	# request lines like raw port-scan bytes that don't look like "METHOD path HTTP/x.x").
+	# That's a normal outcome, not a real error, but under "set -o pipefail" any
+	# non-zero exit in the pipeline kills the whole script. "|| true" tells bash
+	# "treat grep finding nothing as success" so the script keeps running and just
+	# prints an empty/short result for this section instead of dying silently.
+	grep -oP '"\S+ \S+ HTTP/[0-9.]+"' "$LOGFILE" \
+		| awk -F'"' '{print $2}' \
+		| awk '{print $2}' \
+		| sort \
+		| uniq -c \
+		| sort -rn \
+		| head -n "$TOP_N" \
+		| awk '{printf "%s - %s requests\n", $2, $1}' || true
+	echo
+}
+
+#print top status codes
+#What is the purpose?
+#	count how many requests returned each HTTP status code 
+
+print_top_status_codes() {
+	echo "Top 5 response status codes:"
+
+	# -- grep command --
+	# -o = only display output from search
+	# -P = Pearl compatible regex search
+	# \s* = whitespace include everything after
+	# \K = reset cursor
+	# \d{3} = look for three digits
+	# (?=\s+\d+\s+") = lookahead but don't include, any quantity of white spaces followed by any quantity of digits ending in any number of white spaces with " being the boundary
+	# the lookahead was included to ensure that the digits captured are the status code and not the size. "make sure I am not starting my search from the code or includes the status code because it can match the 3 digit search criteria"
+	
+	grep -oP '"\s*\K\d{3}(?=\s+\d+\s+")' "$LOGFILE" \
+		| sort \
+		| uniq -c \
+		| sort -rn \
+		| head -n "$TOP_N" \
+		| awk '{printf "%s - %s requests\n", $2, $1}' || true
+	echo
+}
+
+#print top user agents
+#What is the pur pose?
+#	count how many requests cam from each User-Agent string, show top 5
+
+print_top_user_agents() {
+	echo "Top 5 user agents:"
+
+	# -- grep command --
+	
+	# search for literal double quote
+	# don't include " by reseting cursor
+	# include one or more character that are not a double quote.
+	# [] = class
+	# ^ = all but omit
+	# + = greedy search used to include any quantity of search criteria in class
+	# $LOGFILE = use variable content as data to search from
+	
+	# -- awk command --
+	# user agent contains spaces which need to be accounted for 
+	# set field one as the value for count
+	# set the value of field one to empty field which removes it from the value of $0
+	# sub(/^ /, "") finds an anchored blank space at the start of the line and deletes it by using ""
+	
+	grep -oP '"\K[^"]+(?="$)' "$LOGFILE" \
+		|sort \
+		| uniq -c \
+		| sort -rn \
+		| head -n "$TOP_N" \
+		| awk '{count=$1; $1=""; sub(/^ /, ""); printf "%s - %s requests\n", $0, count}' || true
+
+	}
+
+	print_top_ips
+	print_top_paths
+	print_top_status_codes
+	print_top_user_agents
+
+
